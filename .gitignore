@@ -1,14 +1,10 @@
-credentials.json
-token.json
 .env
-*.db
-__pycache__/
-venv/
-.venv/
-.DS_Store
 credentials.json
 token.json
 emails.db
+*.db
 chroma_db/
 __pycache__/
+venv/
+.venv/
 .DS_Store

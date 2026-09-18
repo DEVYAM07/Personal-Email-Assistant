@@ -2,9 +2,13 @@ import os
 import sys
 from typing import List, Tuple, Optional
 
+from dotenv import load_dotenv
+
 import chromadb
 from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
 import google.genai as genai
+
+load_dotenv()
 
 
 def get_chroma_client(path: str = "./chroma_db") -> chromadb.PersistentClient:
