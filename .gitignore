@@ -1,9 +1,11 @@
 .env
+.env.local
 credentials.json
 token.json
 emails.db
 *.db
 chroma_db/
+/data/
 __pycache__/
 venv/
 .venv/

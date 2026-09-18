@@ -17,11 +17,12 @@ import {
   WifiOff,
 } from "lucide-react";
 
-const HEALTH_URL = "http://localhost:8000/api/health";
-const QUERY_URL = "http://localhost:8000/api/query";
-const SYNC_URL = "http://localhost:8000/api/sync";
-const AUTH_LOGIN_URL = "http://localhost:8000/api/auth/login";
-const AUTH_STATUS_URL = "http://localhost:8000/api/auth/status";
+const API_BASE = (import.meta.env.VITE_API_URL || "http://localhost:8000").replace(/\/$/, "");
+const HEALTH_URL = `${API_BASE}/api/health`;
+const QUERY_URL = `${API_BASE}/api/query`;
+const SYNC_URL = `${API_BASE}/api/sync`;
+const AUTH_LOGIN_URL = `${API_BASE}/api/auth/login`;
+const AUTH_STATUS_URL = `${API_BASE}/api/auth/status`;
 
 const PRESET_QUERIES = [
   { label: "When is my next contest?", icon: Trophy },
@@ -96,7 +97,7 @@ export default function App() {
       setHealth("online");
     } catch {
       setHealth("offline");
-      setError("FastAPI is unreachable at localhost:8000 — is the backend running?");
+      setError(`FastAPI is unreachable at ${API_BASE} — is the backend running?`);
     }
   };
 
@@ -168,7 +169,7 @@ export default function App() {
   }, [userEmail]);
 
   const handleConnect = () => {
-    window.location.href = "http://localhost:8000/api/auth/login";
+    window.location.href = `${API_BASE}/api/auth/login`;
   };
 
   const handleDisconnect = () => {
@@ -212,7 +213,7 @@ export default function App() {
       const isNetwork = msg.includes("Failed to fetch") || msg.includes("NetworkError") || msg.includes("unreachable");
       setError(
         isNetwork
-          ? "Network error: FastAPI is unreachable. Please ensure the backend is running on http://localhost:8000"
+          ? `Network error: FastAPI is unreachable. Please ensure the backend is running on ${API_BASE}`
           : `Sync failed: ${msg}`
       );
     } finally {
@@ -267,7 +268,7 @@ export default function App() {
       const isNetwork = msg.includes("Failed to fetch") || msg.includes("NetworkError") || msg.includes("unreachable");
       setError(
         isNetwork
-          ? "Network error: FastAPI is unreachable. Please ensure the backend is running on http://localhost:8000"
+          ? `Network error: FastAPI is unreachable. Please ensure the backend is running on ${API_BASE}`
           : `Request failed: ${msg}`
       );
       // also push an assistant error bubble so chat history shows it
@@ -276,7 +277,7 @@ export default function App() {
         {
           role: "assistant",
           text: isNetwork
-            ? "⚠️ Could not reach the email service. Please check that FastAPI is running on http://localhost:8000 and try again."
+            ? `⚠️ Could not reach the email service. Please check that FastAPI is running on ${API_BASE} and try again.`
             : `⚠️ Error: ${msg}`,
           sources: [],
         },

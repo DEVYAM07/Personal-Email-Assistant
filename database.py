@@ -7,7 +7,7 @@ helpers for managing the users and emails tables.
 import os
 import sqlite3
 
-DB_PATH = os.path.join(os.path.dirname(__file__), "emails.db")
+DB_PATH = os.getenv("DB_PATH") or os.getenv("SQLITE_PATH") or os.path.join(os.path.dirname(__file__), "emails.db")
 
 
 def get_db_connection():

@@ -58,7 +58,9 @@ get_gmail_service = _get_gmail_service
 extract_body = _extract_body
 
 
-DB_PATH = os.path.join(os.path.dirname(__file__), "emails.db")
+DB_PATH = os.getenv("DB_PATH") or os.getenv("SQLITE_PATH") or os.path.join(os.path.dirname(__file__), "emails.db")
+# Chroma persistence path env (used via ask.get_chroma_client default)
+CHROMA_DB_PATH = os.getenv("CHROMA_DB_PATH") or os.getenv("CHROMA_PATH") or os.path.join(os.path.dirname(__file__), "chroma_db")
 
 # OAuth scopes required per spec
 SCOPES = [
@@ -284,9 +286,24 @@ def _resolve_effective_email(email_param: Optional[str], body_email: Optional[st
 
 app = FastAPI(title="RAG Email Assistant API")
 
+# --- CORS: support multiple origins via FRONTEND_URL env (comma-separated) ---
+def _get_allowed_origins():
+    raw = os.getenv("FRONTEND_URL", "http://localhost:5173")
+    # support comma-separated list and extra CORS_ALLOWED_ORIGINS
+    extra = os.getenv("CORS_ALLOWED_ORIGINS", "")
+    combined = ",".join([raw, extra]) if extra else raw
+    origins = [o.strip().rstrip("/") for o in combined.split(",") if o.strip()]
+    # Also allow Vercel preview suffix if needed (optional wildcard handling via regex - not needed here)
+    # Keep localhost for dev
+    if "http://localhost:5173" not in origins:
+        origins.append("http://localhost:5173")
+    if "http://localhost:3000" not in origins:
+        origins.append("http://localhost:3000")
+    return origins
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origins=_get_allowed_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -939,4 +956,14 @@ def api_sync(sync_req: Optional[SyncRequest] = None, email: Optional[str] = Quer
 
 @app.get("/api/health")
 def api_health() -> dict[str, str]:
+    return {"status": "ok"}
+
+
+@app.get("/")
+def root():
+    return {"status": "ok", "service": "RAG Email Assistant API"}
+
+
+@app.get("/health")
+def health_alias():
     return {"status": "ok"}

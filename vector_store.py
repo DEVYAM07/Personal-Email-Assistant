@@ -1,3 +1,4 @@
+import os
 import sqlite3
 from typing import Any, Dict, List
 
@@ -5,8 +6,10 @@ import chromadb
 from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
 
 
-def fetch_emails(db_path: str = "emails.db") -> List[Dict[str, Any]]:
+def fetch_emails(db_path: str = None) -> List[Dict[str, Any]]:
     """Read all email rows from the SQLite database."""
+    if db_path is None:
+        db_path = os.getenv("DB_PATH") or os.getenv("SQLITE_PATH") or "emails.db"
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
     cursor.execute("SELECT id, subject, from_addr, date, body, snippet FROM emails")
@@ -25,8 +28,10 @@ def fetch_emails(db_path: str = "emails.db") -> List[Dict[str, Any]]:
     ]
 
 
-def init_chroma_client(db_path: str = "./chroma_db") -> chromadb.PersistentClient:
+def init_chroma_client(db_path: str = None) -> chromadb.PersistentClient:
     """Initialize a ChromaDB PersistentClient."""
+    if db_path is None:
+        db_path = os.getenv("CHROMA_DB_PATH") or os.getenv("CHROMA_PATH") or "./chroma_db"
     return chromadb.PersistentClient(path=db_path)
 
 
@@ -66,8 +71,12 @@ def upsert_emails(
         )
 
 
-def main(db_path: str = "emails.db", chroma_path: str = "./chroma_db") -> None:
+def main(db_path: str = None, chroma_path: str = None) -> None:
     """Main entry point: fetch emails from SQLite and upsert into ChromaDB."""
+    if db_path is None:
+        db_path = os.getenv("DB_PATH") or os.getenv("SQLITE_PATH") or "emails.db"
+    if chroma_path is None:
+        chroma_path = os.getenv("CHROMA_DB_PATH") or os.getenv("CHROMA_PATH") or "./chroma_db"
     emails = fetch_emails(db_path)
 
     if not emails:

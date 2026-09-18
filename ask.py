@@ -11,8 +11,10 @@ import google.genai as genai
 load_dotenv()
 
 
-def get_chroma_client(path: str = "./chroma_db") -> chromadb.PersistentClient:
+def get_chroma_client(path: str = None) -> chromadb.PersistentClient:
     """Initialize and return a ChromaDB PersistentClient."""
+    if path is None:
+        path = os.getenv("CHROMA_DB_PATH") or os.getenv("CHROMA_PATH") or "./chroma_db"
     return chromadb.PersistentClient(path=path)
 
 
