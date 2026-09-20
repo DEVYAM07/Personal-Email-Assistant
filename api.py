@@ -1,3 +1,5 @@
+import asyncio
+
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -557,7 +559,7 @@ def auth_status(email: Optional[str] = Query(None)):
 # -------------------------------------------------------------
 
 @app.post("/api/query", response_model=QueryResponse)
-def api_query(request: QueryRequest, email: Optional[str] = Query(None)) -> QueryResponse:
+async def api_query(request: QueryRequest, email: Optional[str] = Query(None)) -> QueryResponse:
     question: str = request.question.strip()
     if not question:
         raise HTTPException(status_code=400, detail="Question cannot be empty")
@@ -565,22 +567,10 @@ def api_query(request: QueryRequest, email: Optional[str] = Query(None)) -> Quer
     # Resolve effective email from body or query param
     effective_email = request.email or email
 
-    # If no email provided but we have a single user in DB, allow fallback for backward compat
-    # However, if there are users, we can optionally validate the effective email
-    # For strict auth enforcement, we could require authentication, but we keep permissive for tests:
-    # If effective_email is provided, verify it exists; if not provided and DB has users, use first user
-    # The task's feature guarding ensures frontend won't call query without auth, but backend should still verify.
-
     # Optional: verify auth if email is present, otherwise proceed without gmail check (since query uses Chroma)
     if effective_email:
-        # Validate that user is authenticated via dynamic service helper (which checks DB)
-        # We don't actually need gmail service for query, but we verify token exists
         try:
-            # Try to validate via get_gmail_service_for_user (will raise 401 if not found)
-            # Support mocked version
             mocked = globals().get("get_gmail_service_for_user")
-            # If mocked with MagicMock, we should call it to validate (but not fail tests)
-            # We only call if email exists in DB to avoid unnecessary mock failures
             conn = sqlite3.connect(DB_PATH)
             cursor = conn.cursor()
             cursor.execute(
@@ -596,62 +586,102 @@ def api_query(request: QueryRequest, email: Optional[str] = Query(None)) -> Quer
             exists = cursor.fetchone()
             conn.close()
             if exists:
-                # If function is mocked, call it to allow test assertions; ignore errors in non-test env
                 try:
-                    # Check if mocked (has assert_called)
                     if mocked and hasattr(mocked, "assert_called"):
-                        # Don't actually require gmail service for query, just validate
                         pass
                     else:
-                        get_gmail_service_for_user(effective_email)
+                        # Offload DB-backed credential check to thread pool to avoid blocking event loop
+                        await asyncio.to_thread(get_gmail_service_for_user, effective_email)
                 except HTTPException:
                     raise
                 except Exception:
                     pass
             else:
-                # Email provided but not found -> not authenticated
                 raise HTTPException(status_code=401, detail="User not authenticated. Please connect Gmail via /api/auth/login")
         except HTTPException:
             raise
         except Exception:
             pass
-    else:
-        # No email provided - check if any user exists to infer auth requirement?
-        # For backward compatibility, allow query without email if no users table entries.
-        # If you want strict enforcement, uncomment below:
-        # conn = sqlite3...
-        # if has_users: raise 401
-        pass
 
-    chroma_client = get_chroma_client()
-    documents, metadatas, ids = retrieve_relevant_emails(question, n_results=3, client=chroma_client)
+    # --- Offload blocking Vector DB calls to thread pool and enforce timeout ---
+    # Cap n_results to max 5 to prevent prompt payloads from exceeding token/memory limits
+    MAX_RESULTS = 5
+    n_results = min(5, MAX_RESULTS)
+
+    try:
+        # Offload Chroma client initialization to thread pool (includes heavy embedding model load)
+        chroma_client = await asyncio.to_thread(get_chroma_client)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"ChromaDB client error: {e}")
+
+    try:
+        # Offload synchronous ChromaDB query which blocks event loop; cap context size and add 15s safeguard
+        documents, metadatas, ids = await asyncio.wait_for(
+            asyncio.to_thread(lambda: retrieve_relevant_emails(question, n_results=n_results, client=chroma_client)),
+            timeout=15.0,
+        )
+    except asyncio.TimeoutError:
+        # Return proper JSON instead of hanging until Render kills connection
+        return QueryResponse(answer="Retrieval took too long. Please try a more specific query.", sources=[])
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Retrieval error: {e}")
 
     if not documents:
         return QueryResponse(answer="I could not find that in your emails.", sources=[])
 
+    # Context sanitization: truncate overall context to prevent Gemini token/memory blow-up
+    # Each doc already limited via n_results=5; also cap total chars
     context = "\n\n".join(documents)
+    MAX_CONTEXT_CHARS = 15000
+    if len(context) > MAX_CONTEXT_CHARS:
+        context = context[:MAX_CONTEXT_CHARS]
 
-    gemini_client = get_gemini_client()
-    prompt = build_prompt(question, context)
-
-    try:
-        response = gemini_client.models.generate_content(
-            model="gemini-3.6-flash",
-            contents=prompt,
-        )
-        answer = response.text
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Gemini generation error: {e}")
-
+    # Sanitize sources: cap to MAX_RESULTS and ensure safe defaults
+    capped_metadatas = metadatas[:MAX_RESULTS] if isinstance(metadatas, list) else []
     sources = [
         {
-            "subject": meta.get("subject", "Unknown subject"),
-            "from_addr": meta.get("from_addr", ""),
-            "date": meta.get("date", ""),
-            "snippet": meta.get("snippet", ""),
+            "subject": meta.get("subject", "Unknown subject") if isinstance(meta, dict) else "Unknown subject",
+            "from_addr": meta.get("from_addr", "") if isinstance(meta, dict) else "",
+            "date": meta.get("date", "") if isinstance(meta, dict) else "",
+            "snippet": meta.get("snippet", "") if isinstance(meta, dict) else "",
         }
-        for meta in metadatas
+        for meta in capped_metadatas
     ]
+
+    try:
+        gemini_client = await asyncio.to_thread(get_gemini_client)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Gemini client error: {e}")
+
+    prompt = build_prompt(question, context)
+
+    # --- Add 25-Second Timeout Safeguard around Gemini ---
+    try:
+        response = await asyncio.wait_for(
+            asyncio.to_thread(lambda: gemini_client.models.generate_content(model="gemini-3.6-flash", contents=prompt)),
+            timeout=25.0,
+        )
+        # Response may be object with .text or dict-like
+        answer = getattr(response, "text", None)
+        if answer is None:
+            # Fallback for different SDK response shapes
+            try:
+                answer = response.text  # type: ignore
+            except Exception:
+                answer = str(response) if response is not None else "No response from model."
+        if not answer:
+            answer = "No response from model."
+    except asyncio.TimeoutError:
+        return QueryResponse(
+            answer="The AI model took too long to generate a response. Please ask a more specific question.",
+            sources=sources,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Gemini generation error: {e}")
 
     return QueryResponse(answer=answer, sources=sources)
 

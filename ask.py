@@ -40,10 +40,18 @@ def retrieve_relevant_emails(
     """Query ChromaDB for the top matching email documents and metadata.
 
     Returns a tuple of (documents, metadatas, ids).
+    Caps n_results to max 5 to prevent prompt payloads from exceeding token/memory limits.
     """
     if not query or not query.strip():
         print("⚠️ Warning: Empty query provided.", file=sys.stderr)
         return [], [], []
+
+    # Sanitize n_results: cap to 5 as per bug fix (Render timeout safeguard)
+    try:
+        n_results = int(n_results)
+    except Exception:
+        n_results = 3
+    n_results = max(1, min(n_results, 5))
 
     chroma_client = client or get_chroma_client()
     embedding_fn = get_embedding_function()
