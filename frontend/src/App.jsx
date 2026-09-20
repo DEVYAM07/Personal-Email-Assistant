@@ -17,12 +17,18 @@ import {
   WifiOff,
 } from "lucide-react";
 
-const API_BASE = (import.meta.env.VITE_API_URL || "http://localhost:8000").replace(/\/$/, "");
+const API_BASE = (import.meta.env.VITE_API_URL || (import.meta.env.PROD ? "https://personal-email-assistant-api.onrender.com" : "http://localhost:8000")).replace(/\/$/, "");
 const HEALTH_URL = `${API_BASE}/api/health`;
 const QUERY_URL = `${API_BASE}/api/query`;
 const SYNC_URL = `${API_BASE}/api/sync`;
 const AUTH_LOGIN_URL = `${API_BASE}/api/auth/login`;
 const AUTH_STATUS_URL = `${API_BASE}/api/auth/status`;
+
+// helper to detect network/CORS failures vs API errors
+function isNetworkErrorMessage(msg) {
+  const m = String(msg).toLowerCase();
+  return m.includes("failed to fetch") || m.includes("networkerror") || m.includes("net::err_failed") || m.includes("err_failed") || m.includes("load failed") || m.includes("cors") || m.includes("unreachable");
+}
 
 const PRESET_QUERIES = [
   { label: "When is my next contest?", icon: Trophy },
@@ -90,14 +96,23 @@ export default function App() {
     setHealth("checking");
     setError(null);
     try {
-      const res = await fetch(HEALTH_URL);
+      const res = await fetch(HEALTH_URL, {
+        method: "GET",
+        mode: "cors",
+        headers: { "Content-Type": "application/json" },
+      });
       if (!res.ok) throw new Error(`Health check failed: ${res.status}`);
       // try to parse but not required
       await res.json().catch(() => null);
       setHealth("online");
-    } catch {
+    } catch (e) {
       setHealth("offline");
-      setError(`FastAPI is unreachable at ${API_BASE} — is the backend running?`);
+      const msg = e instanceof Error ? e.message : String(e);
+      if (isNetworkErrorMessage(msg)) {
+        setError(`FastAPI is unreachable at ${API_BASE} — is the backend running? (CORS/network error: ${msg})`);
+      } else {
+        setError(`FastAPI is unreachable at ${API_BASE} — is the backend running?`);
+      }
     }
   };
 
@@ -134,14 +149,17 @@ export default function App() {
       if (stored) {
         setUserEmail(stored);
         // verify with backend status route
-        fetch(`${AUTH_STATUS_URL}?email=${encodeURIComponent(stored)}`)
-          .then((res) => res.json())
+        fetch(`${AUTH_STATUS_URL}?email=${encodeURIComponent(stored)}`, { mode: "cors" })
+          .then((res) => {
+            if (!res.ok) throw new Error(`Status ${res.status}`);
+            return res.json();
+          })
           .then((data) => {
             setIsAuthenticated(!!data.authenticated);
           })
           .catch(() => {
-            // if status check fails, assume not authenticated but keep email for UI fallback
-            // We set false to show Connect button
+            // if status check fails (network/CORS), assume not authenticated but keep email for UI fallback
+            // We set false to show Connect button; avoid generic unreachable banner here
             setIsAuthenticated(false);
           });
       } else {
@@ -162,8 +180,11 @@ export default function App() {
     // Only verify if not already set from URL success; still verify to ensure token valid
     // Avoid double fetch on initial mount where we already verified
     // We can still fetch to confirm
-    fetch(`${AUTH_STATUS_URL}?email=${encodeURIComponent(userEmail)}`)
-      .then((res) => res.json())
+    fetch(`${AUTH_STATUS_URL}?email=${encodeURIComponent(userEmail)}`, { mode: "cors" })
+      .then((res) => {
+        if (!res.ok) throw new Error(`Status ${res.status}`);
+        return res.json();
+      })
       .then((data) => setIsAuthenticated(!!data.authenticated))
       .catch(() => setIsAuthenticated(false));
   }, [userEmail]);
@@ -191,7 +212,12 @@ export default function App() {
       setError("Connect your Gmail account to start querying emails");
       return;
     }
-    if (isSyncing || health === "offline") return;
+    if (isSyncing) return;
+    // Allow sync even if health is offline initially - health check may be stale; but warn if offline
+    if (health === "offline") {
+      // try to re-check health first, but don't block
+      console.warn("Sync attempted while health is offline - attempting anyway");
+    }
     setIsSyncing(true);
     setSyncMessage(null);
     setError(null);
@@ -199,10 +225,22 @@ export default function App() {
       const syncUrl = userEmail ? `${SYNC_URL}?email=${encodeURIComponent(userEmail)}` : SYNC_URL;
       const res = await fetch(syncUrl, {
         method: "POST",
+        mode: "cors",
+        headers: {
+          "Content-Type": "application/json",
+          ...(userEmail ? { "X-User-Email": userEmail } : {}),
+        },
+        body: JSON.stringify(userEmail ? { email: userEmail } : {}),
       });
       if (!res.ok) {
         const text = await res.text().catch(() => "");
-        throw new Error(text || `Sync failed (${res.status})`);
+        // Try to extract detail from JSON error
+        let detail = text;
+        try {
+          const j = JSON.parse(text);
+          detail = j.detail || j.message || text;
+        } catch {}
+        throw new Error(detail || `Sync failed (${res.status})`);
       }
       const data = await res.json();
       const added = data.added ?? 0;
@@ -210,12 +248,26 @@ export default function App() {
       setTimeout(() => setSyncMessage(null), 4000);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      const isNetwork = msg.includes("Failed to fetch") || msg.includes("NetworkError") || msg.includes("unreachable");
-      setError(
-        isNetwork
-          ? `Network error: FastAPI is unreachable. Please ensure the backend is running on ${API_BASE}`
-          : `Sync failed: ${msg}`
-      );
+      const isNetwork = isNetworkErrorMessage(msg);
+      if (isNetwork) {
+        // Distinguish CORS vs generic unreachable when health is online
+        if (health === "online") {
+          setError(
+            `Network error: Unable to reach ${API_BASE} due to network/CORS. Please ensure the backend allows requests from ${window.location.origin} and is running. (${msg})`
+          );
+        } else {
+          setError(
+            `Network error: FastAPI is unreachable. Please ensure the backend is running on ${API_BASE} (${msg})`
+          );
+        }
+      } else {
+        // Preserve server detail for debugging; avoid generic unreachable
+        if (msg.includes("401") || msg.toLowerCase().includes("not authenticated") || msg.toLowerCase().includes("unauthorized")) {
+          setError(`Sync failed: Not authenticated. Please reconnect Gmail. (${msg})`);
+        } else {
+          setError(`Sync failed: ${msg}`);
+        }
+      }
     } finally {
       setIsSyncing(false);
     }
@@ -243,15 +295,28 @@ export default function App() {
     try {
       const body = { question: q };
       if (userEmail) body.email = userEmail;
-      const res = await fetch(QUERY_URL, {
+      const queryUrl = userEmail ? `${QUERY_URL}?email=${encodeURIComponent(userEmail)}` : QUERY_URL;
+      const res = await fetch(queryUrl, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        mode: "cors",
+        headers: {
+          "Content-Type": "application/json",
+          ...(userEmail ? { "X-User-Email": userEmail } : {}),
+        },
         body: JSON.stringify(body),
       });
 
       if (!res.ok) {
         const text = await res.text().catch(() => "");
-        throw new Error(text || `Request failed (${res.status})`);
+        let detail = text;
+        try {
+          const j = JSON.parse(text);
+          detail = j.detail || j.message || text;
+        } catch {}
+        // Provide status-aware message
+        if (res.status === 401) throw new Error(detail || "Unauthorized - Please connect Gmail via /api/auth/login");
+        if (res.status === 400) throw new Error(detail || `Bad request (${res.status})`);
+        throw new Error(detail || `Request failed (${res.status})`);
       }
 
       const data = await res.json();
@@ -265,20 +330,37 @@ export default function App() {
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       // network error vs API error -> show inline error bubble
-      const isNetwork = msg.includes("Failed to fetch") || msg.includes("NetworkError") || msg.includes("unreachable");
-      setError(
-        isNetwork
-          ? `Network error: FastAPI is unreachable. Please ensure the backend is running on ${API_BASE}`
-          : `Request failed: ${msg}`
-      );
+      const isNetwork = isNetworkErrorMessage(msg);
+      let errorBanner;
+      let bubbleText;
+      if (isNetwork) {
+        if (health === "online") {
+          errorBanner = `Network error: Unable to reach ${API_BASE} due to network/CORS. Please ensure the backend allows requests from ${window.location.origin} and is running. (${msg})`;
+          bubbleText = `⚠️ Could not reach the email service due to network/CORS. Please check that FastAPI allows CORS from ${window.location.origin} and try again.`;
+        } else {
+          errorBanner = `Network error: FastAPI is unreachable. Please ensure the backend is running on ${API_BASE} (${msg})`;
+          bubbleText = `⚠️ Could not reach the email service. Please check that FastAPI is running on ${API_BASE} and try again.`;
+        }
+      } else {
+        // Handle auth vs generic errors without showing unreachable
+        if (msg.toLowerCase().includes("not authenticated") || msg.includes("401") || msg.toLowerCase().includes("unauthorized")) {
+          errorBanner = `Request failed: Not authenticated. Please connect Gmail. (${msg})`;
+          bubbleText = `⚠️ Authentication required: Please connect your Gmail account via Connect Gmail.`;
+        } else if (msg.toLowerCase().includes("no refresh token") || msg.includes("500")) {
+          errorBanner = `Request failed: ${msg}`;
+          bubbleText = `⚠️ Error: ${msg}`;
+        } else {
+          errorBanner = `Request failed: ${msg}`;
+          bubbleText = `⚠️ Error: ${msg}`;
+        }
+      }
+      setError(errorBanner);
       // also push an assistant error bubble so chat history shows it
       setMessages((prev) => [
         ...prev,
         {
           role: "assistant",
-          text: isNetwork
-            ? `⚠️ Could not reach the email service. Please check that FastAPI is running on ${API_BASE} and try again.`
-            : `⚠️ Error: ${msg}`,
+          text: bubbleText,
           sources: [],
         },
       ]);

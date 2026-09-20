@@ -19,7 +19,7 @@ services:
       - key: REDIRECT_URI
         value: https://personal-email-assistant-api.onrender.com/api/auth/callback
       - key: FRONTEND_URL
-        value: https://your-frontend.vercel.app
+        value: https://personal-email-assistant-2.vercel.app
       - key: DB_PATH
         value: /tmp/emails.db
       - key: CHROMA_DB_PATH

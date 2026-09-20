@@ -286,27 +286,18 @@ def _resolve_effective_email(email_param: Optional[str], body_email: Optional[st
 
 app = FastAPI(title="RAG Email Assistant API")
 
-# --- CORS: support multiple origins via FRONTEND_URL env (comma-separated) ---
-def _get_allowed_origins():
-    raw = os.getenv("FRONTEND_URL", "http://localhost:5173")
-    # support comma-separated list and extra CORS_ALLOWED_ORIGINS
-    extra = os.getenv("CORS_ALLOWED_ORIGINS", "")
-    combined = ",".join([raw, extra]) if extra else raw
-    origins = [o.strip().rstrip("/") for o in combined.split(",") if o.strip()]
-    # Also allow Vercel preview suffix if needed (optional wildcard handling via regex - not needed here)
-    # Keep localhost for dev
-    if "http://localhost:5173" not in origins:
-        origins.append("http://localhost:5173")
-    if "http://localhost:3000" not in origins:
-        origins.append("http://localhost:3000")
-    return origins
-
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=_get_allowed_origins(),
+    allow_origins=[
+        "https://personal-email-assistant-2.vercel.app",
+        "http://localhost:5173",
+        "http://localhost:3000",
+        "*"  # Fallback wildcard for staging/preview deployments
+    ],
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
+    expose_headers=["*"],
 )
 
 
