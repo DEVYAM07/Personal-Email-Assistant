@@ -66,8 +66,11 @@ def extract_body(payload):
     return ""
 
 
-def fetch_recent_emails(service, max_results=100, days_back=7):
+def fetch_recent_emails(service, max_results=15, days_back=7):
     """Fetch emails from the last N days."""
+    # Cap batch to 15 to fit within Render 512 MB memory budget (OOM safeguard)
+    # Render OOM fix: messages = service.users().messages().list(userId='me', maxResults=15).execute()
+    max_results = min(max_results, 15)  # enforce maxResults=15 cap
     now = datetime.utcnow()
     since = now - timedelta(days=days_back)
     since_timestamp = int(datetime.timestamp(since))
@@ -163,7 +166,7 @@ def main():
         description="Fetch emails from Gmail and store to SQLite"
     )
     parser.add_argument(
-        "--max", type=int, default=100, help="Max emails to fetch"
+        "--max", type=int, default=15, help="Max emails to fetch"
     )
     parser.add_argument(
         "--days", type=int, default=7, help="Fetch emails from last N days"
