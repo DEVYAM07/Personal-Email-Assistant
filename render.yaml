@@ -17,7 +17,7 @@ services:
       - key: GOOGLE_CLIENT_SECRET
         sync: false
       - key: REDIRECT_URI
-        value: https://personal-email-assistant-api-m2ud.onrender.com/api/auth/callback
+        value: https://personal-email-assistant-api.onrender.com/api/auth/callback
       - key: FRONTEND_URL
         value: https://personal-email-assistant-2.vercel.app
       - key: DB_PATH
