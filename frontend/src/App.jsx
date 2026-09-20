@@ -21,6 +21,7 @@ const API_BASE = (import.meta.env.VITE_API_URL || (import.meta.env.PROD ? "https
 const HEALTH_URL = `${API_BASE}/api/health`;
 const QUERY_URL = `${API_BASE}/api/query`;
 const SYNC_URL = `${API_BASE}/api/sync`;
+const SYNC_STATUS_URL = `${API_BASE}/api/sync/status`;
 const AUTH_LOGIN_URL = `${API_BASE}/api/auth/login`;
 const AUTH_STATUS_URL = `${API_BASE}/api/auth/status`;
 
@@ -206,21 +207,41 @@ export default function App() {
     endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [messages, loading, error]);
 
-  // ---- sync inbox ----
+  // ---- sync inbox (async polling to avoid Render 50s gateway timeout) ----
   const sendSync = async () => {
     if (!isAuthenticated) {
       setError("Connect your Gmail account to start querying emails");
       return;
     }
     if (isSyncing) return;
-    // Allow sync even if health is offline initially - health check may be stale; but warn if offline
     if (health === "offline") {
-      // try to re-check health first, but don't block
       console.warn("Sync attempted while health is offline - attempting anyway");
     }
     setIsSyncing(true);
     setSyncMessage(null);
     setError(null);
+
+    // Helper to handle network/CORS vs API errors
+    const handleSyncError = (msg) => {
+      const isNetwork = isNetworkErrorMessage(msg);
+      if (isNetwork) {
+        if (health === "online") {
+          setError(
+            `Network error: Unable to reach ${API_BASE} due to network/CORS. Please ensure the backend allows requests from ${window.location.origin} and is running. (${msg})`
+          );
+        } else {
+          setError(`Network error: FastAPI is unreachable. Please ensure the backend is running on ${API_BASE} (${msg})`);
+        }
+      } else {
+        if (msg.includes("401") || msg.toLowerCase().includes("not authenticated") || msg.toLowerCase().includes("unauthorized")) {
+          setError(`Sync failed: Not authenticated. Please reconnect Gmail. (${msg})`);
+        } else {
+          setError(`Sync failed: ${msg}`);
+        }
+      }
+      setIsSyncing(false);
+    };
+
     try {
       const syncUrl = userEmail ? `${SYNC_URL}?email=${encodeURIComponent(userEmail)}` : SYNC_URL;
       const res = await fetch(syncUrl, {
@@ -234,7 +255,6 @@ export default function App() {
       });
       if (!res.ok) {
         const text = await res.text().catch(() => "");
-        // Try to extract detail from JSON error
         let detail = text;
         try {
           const j = JSON.parse(text);
@@ -243,33 +263,135 @@ export default function App() {
         throw new Error(detail || `Sync failed (${res.status})`);
       }
       const data = await res.json();
+
+      // Detect async job response (202 or job_id present) vs legacy synchronous success
+      const jobId = data.job_id || data.jobId || data.id || null;
+      const isAsync = res.status === 202 || jobId || data.status === "started" || data.status === "pending" || data.status === "running";
+
+      if (isAsync && jobId) {
+        // Poll GET /api/sync/status?job_id=...
+        setSyncMessage(`Sync started — fetching inbox...`);
+        let attempts = 0;
+        const maxAttempts = 90; // 3 minutes (90 * 2s)
+        let pollTimeout = null;
+
+        const cleanup = () => {
+          if (pollTimeout) clearTimeout(pollTimeout);
+        };
+
+        const poll = async () => {
+          attempts += 1;
+          try {
+            const statusUrl = `${SYNC_STATUS_URL}?job_id=${encodeURIComponent(jobId)}`;
+            const sRes = await fetch(statusUrl, {
+              method: "GET",
+              mode: "cors",
+              headers: {
+                ...(userEmail ? { "X-User-Email": userEmail } : {}),
+              },
+            });
+            if (!sRes.ok) {
+              const t = await sRes.text().catch(() => "");
+              let d = t;
+              try {
+                const j = JSON.parse(t);
+                d = j.detail || j.message || t;
+              } catch {}
+              throw new Error(d || `Status check failed (${sRes.status})`);
+            }
+            const sData = await sRes.json();
+            const sStatus = sData.status;
+
+            if (sStatus === "completed" || sStatus === "success") {
+              const added = sData.added ?? 0;
+              const total = sData.total_fetched ?? sData.totalFetched ?? 0;
+              setSyncMessage(`Synced ${added} new emails${total ? ` (fetched ${total})` : ""}`);
+              setTimeout(() => setSyncMessage(null), 4000);
+              setIsSyncing(false);
+              cleanup();
+              return;
+            }
+            if (sStatus === "failed" || sStatus === "error") {
+              const err = sData.error || sData.detail || "Sync failed";
+              throw new Error(err);
+            }
+            // still running/pending/started
+            if (sData.progress) {
+              setSyncMessage(`Syncing... ${sData.progress}`);
+            } else if (sStatus === "running" || sStatus === "pending" || sStatus === "started") {
+              setSyncMessage(`Syncing... ${attempts * 2}s elapsed`);
+            }
+            if (attempts < maxAttempts) {
+              pollTimeout = setTimeout(poll, 2000);
+            } else {
+              throw new Error("Sync polling timeout — please refresh and check again");
+            }
+          } catch (e) {
+            const msg = e instanceof Error ? e.message : String(e);
+            handleSyncError(msg);
+            cleanup();
+          }
+        };
+        // start polling after short delay (allow backend to transition to running)
+        setTimeout(poll, 1500);
+        return; // keep isSyncing true until poll finishes
+      }
+
+      if (isAsync && !jobId) {
+        // Async but no job_id (fallback poll by email)
+        setSyncMessage(`Sync started — fetching inbox...`);
+        let attempts = 0;
+        const maxAttempts = 90;
+        let pollTimeout = null;
+        const cleanup = () => { if (pollTimeout) clearTimeout(pollTimeout); };
+        const pollByEmail = async () => {
+          attempts += 1;
+          try {
+            const statusUrl = userEmail ? `${SYNC_STATUS_URL}?email=${encodeURIComponent(userEmail)}` : SYNC_STATUS_URL;
+            const sRes = await fetch(statusUrl, { method: "GET", mode: "cors", headers: { ...(userEmail ? { "X-User-Email": userEmail } : {}) } });
+            if (!sRes.ok) throw new Error(`Status check failed (${sRes.status})`);
+            const sData = await sRes.json();
+            const sStatus = sData.status;
+            if (sStatus === "completed" || sStatus === "success") {
+              const added = sData.added ?? 0;
+              setSyncMessage(`Synced ${added} new emails`);
+              setTimeout(() => setSyncMessage(null), 4000);
+              setIsSyncing(false);
+              cleanup();
+              return;
+            }
+            if (sStatus === "failed") throw new Error(sData.error || "Sync failed");
+            if (sStatus === "idle" && attempts > 2) {
+              // still idle after a bit — maybe job not yet created, keep waiting
+              setSyncMessage(`Syncing... ${attempts * 2}s elapsed`);
+            } else if (sData.progress) {
+              setSyncMessage(`Syncing... ${sData.progress}`);
+            }
+            if (attempts < maxAttempts) {
+              pollTimeout = setTimeout(pollByEmail, 2000);
+            } else {
+              setIsSyncing(false);
+              cleanup();
+              setError("Sync polling timeout — please refresh");
+            }
+          } catch (e) {
+            handleSyncError(e instanceof Error ? e.message : String(e));
+            cleanup();
+          }
+        };
+        setTimeout(pollByEmail, 1500);
+        return;
+      }
+
+      // Legacy synchronous path (no job_id, status success)
       const added = data.added ?? 0;
-      setSyncMessage(`Synced ${added} new emails`);
+      const total = data.total_fetched ?? data.totalFetched ?? 0;
+      setSyncMessage(`Synced ${added} new emails${total ? ` (fetched ${total})` : ""}`);
       setTimeout(() => setSyncMessage(null), 4000);
+      setIsSyncing(false);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      const isNetwork = isNetworkErrorMessage(msg);
-      if (isNetwork) {
-        // Distinguish CORS vs generic unreachable when health is online
-        if (health === "online") {
-          setError(
-            `Network error: Unable to reach ${API_BASE} due to network/CORS. Please ensure the backend allows requests from ${window.location.origin} and is running. (${msg})`
-          );
-        } else {
-          setError(
-            `Network error: FastAPI is unreachable. Please ensure the backend is running on ${API_BASE} (${msg})`
-          );
-        }
-      } else {
-        // Preserve server detail for debugging; avoid generic unreachable
-        if (msg.includes("401") || msg.toLowerCase().includes("not authenticated") || msg.toLowerCase().includes("unauthorized")) {
-          setError(`Sync failed: Not authenticated. Please reconnect Gmail. (${msg})`);
-        } else {
-          setError(`Sync failed: ${msg}`);
-        }
-      }
-    } finally {
-      setIsSyncing(false);
+      handleSyncError(msg);
     }
   };
 
