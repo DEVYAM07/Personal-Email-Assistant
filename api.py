@@ -604,9 +604,10 @@ async def api_query(request: QueryRequest, email: Optional[str] = Query(None)) -
             pass
 
     # --- Offload blocking Vector DB calls to thread pool and enforce timeout ---
-    # Cap n_results to max 5 to prevent prompt payloads from exceeding token/memory limits
-    MAX_RESULTS = 5
-    n_results = min(5, MAX_RESULTS)
+    # Cap n_results to max 3 to prevent prompt payloads from exceeding token/memory limits
+    # Trim Context to Top 3 Emails: fewer tokens dramatically cuts Gemini latency (flash model)
+    MAX_RESULTS = 3
+    n_results = min(3, MAX_RESULTS)
 
     try:
         # Offload Chroma client initialization to thread pool (includes heavy embedding model load)
@@ -632,7 +633,7 @@ async def api_query(request: QueryRequest, email: Optional[str] = Query(None)) -
         return QueryResponse(answer="I could not find that in your emails.", sources=[])
 
     # Context sanitization: truncate overall context to prevent Gemini token/memory blow-up
-    # Each doc already limited via n_results=5; also cap total chars
+    # Each doc already limited via n_results=3; also cap total chars (trim to top 3 cuts latency)
     context = "\n\n".join(documents)
     MAX_CONTEXT_CHARS = 15000
     if len(context) > MAX_CONTEXT_CHARS:
@@ -657,11 +658,12 @@ async def api_query(request: QueryRequest, email: Optional[str] = Query(None)) -
 
     prompt = build_prompt(question, context)
 
-    # --- Add 25-Second Timeout Safeguard around Gemini ---
+    # --- Add 40-Second Timeout Safeguard around Gemini (safely below Render 50s cutoff) ---
+    # Using flash model (gemini-1.5-flash) cuts inference to 1-3s vs 15-30s for pro models
     try:
         response = await asyncio.wait_for(
-            asyncio.to_thread(lambda: gemini_client.models.generate_content(model="gemini-3.6-flash", contents=prompt)),
-            timeout=25.0,
+            asyncio.to_thread(lambda: gemini_client.models.generate_content(model="gemini-1.5-flash", contents=prompt)),
+            timeout=40.0,
         )
         # Response may be object with .text or dict-like
         answer = getattr(response, "text", None)

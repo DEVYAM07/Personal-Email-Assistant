@@ -40,18 +40,19 @@ def retrieve_relevant_emails(
     """Query ChromaDB for the top matching email documents and metadata.
 
     Returns a tuple of (documents, metadatas, ids).
-    Caps n_results to max 5 to prevent prompt payloads from exceeding token/memory limits.
+    Caps n_results to max 3 to prevent prompt payloads from exceeding token/memory limits.
+    Trim Context to Top 3 Emails: fewer tokens dramatically cuts Gemini latency.
     """
     if not query or not query.strip():
         print("⚠️ Warning: Empty query provided.", file=sys.stderr)
         return [], [], []
 
-    # Sanitize n_results: cap to 5 as per bug fix (Render timeout safeguard)
+    # Sanitize n_results: cap to 3 as per bug fix (Render timeout safeguard + latency cut)
     try:
         n_results = int(n_results)
     except Exception:
         n_results = 3
-    n_results = max(1, min(n_results, 5))
+    n_results = max(1, min(n_results, 3))
 
     chroma_client = client or get_chroma_client()
     embedding_fn = get_embedding_function()
@@ -83,7 +84,7 @@ def build_prompt(query: str, context: str) -> str:
 
 
 def generate_answer(query: str, context: str) -> Optional[str]:
-    """Call gemini-3.6-flash with the structured prompt and return the answer."""
+    """Call gemini-1.5-flash with the structured prompt and return the answer (flash = 1-3s vs 15-30s for pro)."""
     if not context or context.strip() == "":
         return "I could not find that in your emails."
 
@@ -92,7 +93,7 @@ def generate_answer(query: str, context: str) -> Optional[str]:
 
     try:
         response = client.models.generate_content(
-            model="gemini-3.6-flash",
+            model="gemini-1.5-flash",
             contents=prompt,
         )
         return response.text
