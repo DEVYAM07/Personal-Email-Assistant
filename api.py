@@ -286,14 +286,33 @@ def _resolve_effective_email(email_param: Optional[str], body_email: Optional[st
 
 app = FastAPI(title="RAG Email Assistant API")
 
+def _get_cors_origins() -> list[str]:
+    """Build CORS origins dynamically from env. Filters wildcard when credentials enabled."""
+    frontend_raw = os.getenv("FRONTEND_URL", "https://personal-email-assistant-2.vercel.app")
+    extra_raw = os.getenv("CORS_ALLOWED_ORIGINS", "")
+    # Support comma-separated lists in both vars
+    combined = f"{frontend_raw},{extra_raw}"
+    origins = [o.strip().rstrip("/") for o in combined.split(",") if o.strip()]
+    # Ensure localhost dev origins present
+    for dev in ["http://localhost:5173", "http://localhost:3000"]:
+        if dev not in origins:
+            origins.append(dev)
+    # Remove wildcard when allow_credentials is True (spec violation)
+    origins = [o for o in origins if o != "*"]
+    # De-duplicate preserving order
+    seen = set()
+    deduped = []
+    for o in origins:
+        if o not in seen:
+            seen.add(o)
+            deduped.append(o)
+    return deduped
+
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "https://personal-email-assistant-2.vercel.app",
-        "http://localhost:5173",
-        "http://localhost:3000",
-        "*"  # Fallback wildcard for staging/preview deployments
-    ],
+    allow_origins=_get_cors_origins(),
+    allow_origin_regex=r"https://.*\.vercel\.app",
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
