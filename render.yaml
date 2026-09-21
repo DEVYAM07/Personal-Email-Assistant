@@ -1,0 +1,28 @@
+services:
+  - type: web
+    name: personal-email-assistant-api
+    env: python
+    region: oregon
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.10.0
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: REDIRECT_URI
+        sync: false
+      - key: FRONTEND_URL
+        sync: false
+      - key: SYNC_BATCH_SIZE
+        value: 15
+      - key: DB_PATH
+        value: ./emails.db
+      - key: CHROMA_DB_PATH
+        value: ./chroma_db

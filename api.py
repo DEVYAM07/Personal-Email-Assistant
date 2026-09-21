@@ -159,7 +159,7 @@ def _find_latest_job_for_email(email: str) -> Optional[dict[str, Any]]:
 
 def _perform_sync_internal(effective_email: str, job_id: Optional[str] = None) -> dict[str, Any]:
     """
-    Synchronous sync work: fetch 100 emails, dedup, insert SQLite, chunk, embed, upsert.
+    Synchronous sync work: fetch batch emails (SYNC_BATCH_SIZE env, default 15 for Render 512MB), dedup, insert SQLite, chunk, embed, upsert.
     Extracted from original api_sync to allow background execution.
     Updates job progress if job_id provided.
     Returns {"added": int, "total_fetched": int}
@@ -200,7 +200,8 @@ def _perform_sync_internal(effective_email: str, job_id: Optional[str] = None) -
 
     _progress("Fetching message list from Gmail")
     try:
-        results = service.users().messages().list(userId="me", maxResults=100).execute()
+        sync_batch_size = int(os.getenv("SYNC_BATCH_SIZE", "15"))
+        results = service.users().messages().list(userId="me", maxResults=sync_batch_size).execute()
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Gmail API list error: {e}")
     messages = results.get("messages", []) if isinstance(results, dict) else []
@@ -624,15 +625,14 @@ app = FastAPI(title="RAG Email Assistant API")
 
 def _get_cors_origins() -> list[str]:
     """Build CORS origins dynamically from env. Filters wildcard when credentials enabled."""
-    frontend_raw = os.getenv("FRONTEND_URL", "https://personal-email-assistant-2.vercel.app")
+    frontend_raw = os.getenv("FRONTEND_URL", "http://localhost:5173")
     extra_raw = os.getenv("CORS_ALLOWED_ORIGINS", "")
     # Support comma-separated lists in both vars
     combined = f"{frontend_raw},{extra_raw}"
     origins = [o.strip().rstrip("/") for o in combined.split(",") if o.strip()]
-    # Ensure localhost dev origins present
-    for dev in ["http://localhost:5173", "http://localhost:3000"]:
-        if dev not in origins:
-            origins.append(dev)
+    # Ensure localhost dev origin present
+    if "http://localhost:5173" not in origins:
+        origins.append("http://localhost:5173")
     # Remove wildcard when allow_credentials is True (spec violation)
     origins = [o for o in origins if o != "*"]
     # De-duplicate preserving order

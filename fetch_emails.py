@@ -66,10 +66,14 @@ def extract_body(payload):
     return ""
 
 
-def fetch_recent_emails(service, max_results=100, days_back=7):
+def fetch_recent_emails(service, max_results=None, days_back=7):
     """Fetch emails from the last N days."""
-    # Hugging Face Spaces 16 GB RAM - supports 100 emails batch
-    max_results = min(max_results, 100)  # enforce maxResults=100 cap
+    # Render Free Tier 512 MB - cap batch to prevent OOM (SYNC_BATCH_SIZE env, default 15)
+    default_batch = int(os.getenv("SYNC_BATCH_SIZE", "15"))
+    if max_results is None:
+        max_results = default_batch
+    else:
+        max_results = min(int(max_results), default_batch)
     now = datetime.utcnow()
     since = now - timedelta(days=days_back)
     since_timestamp = int(datetime.timestamp(since))
@@ -165,7 +169,7 @@ def main():
         description="Fetch emails from Gmail and store to SQLite"
     )
     parser.add_argument(
-        "--max", type=int, default=100, help="Max emails to fetch"
+        "--max", type=int, default=int(os.getenv("SYNC_BATCH_SIZE", "15")), help="Max emails to fetch"
     )
     parser.add_argument(
         "--days", type=int, default=7, help="Fetch emails from last N days"

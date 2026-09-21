@@ -1,30 +1,30 @@
-"""
-Main entry point for Render deployment compatibility.
-Re-exports FastAPI app from api.py with correct CORS configuration.
-
-CORS configuration (must match api.py):
+import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-app = FastAPI()
+# Clean FastAPI instance for Render (no Gradio)
+app = FastAPI(title="Personal Email Assistant API")
 
+# Dynamic CORS — no hardcoded Vercel/Render/HF URLs
+# FRONTEND_URL injected via env on Render/Vercel; defaults to localhost for dev
+frontend_url = os.environ.get("FRONTEND_URL", "http://localhost:5173")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "https://personal-email-assistant-2.vercel.app",
-        "http://localhost:5173",
-        "http://localhost:3000",
-        "*"  # Fallback wildcard for staging/preview deployments
-    ],
+    allow_origins=[frontend_url, "http://localhost:5173"],
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_methods=["*"],
     allow_headers=["*"],
-    expose_headers=["*"],
 )
-"""
 
-from api import app  # noqa: F401
+# Re-export actual API app with all routes (ensures main:app has endpoints)
+# api.py already configures matching dynamic CORS via _get_cors_origins()
+try:
+    from api import app as api_app
+    app = api_app
+except ImportError:
+    pass
 
-# Ensure app is correctly configured for CORS if imported via main:app
-# The actual CORS middleware is configured in api.py; this re-export ensures
-# both api:app and main:app work with Render's startCommand variations.
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run("main:app", host="0.0.0.0", port=port)

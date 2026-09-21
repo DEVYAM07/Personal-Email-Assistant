@@ -17,7 +17,7 @@ import {
   WifiOff,
 } from "lucide-react";
 
-const API_BASE = (import.meta.env.VITE_API_URL || (import.meta.env.PROD ? "https://DarkByteX-personal-email-assistant.hf.space" : "http://localhost:8000")).replace(/\/$/, "");
+const API_BASE = (import.meta.env.VITE_API_URL || "http://localhost:8000").replace(/\/$/, "");
 const HEALTH_URL = `${API_BASE}/api/health`;
 const QUERY_URL = `${API_BASE}/api/query`;
 const SYNC_URL = `${API_BASE}/api/sync`;
