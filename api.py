@@ -159,7 +159,7 @@ def _find_latest_job_for_email(email: str) -> Optional[dict[str, Any]]:
 
 def _perform_sync_internal(effective_email: str, job_id: Optional[str] = None) -> dict[str, Any]:
     """
-    Synchronous sync work: fetch 15 emails, dedup, insert SQLite, chunk, embed, upsert.
+    Synchronous sync work: fetch 100 emails, dedup, insert SQLite, chunk, embed, upsert.
     Extracted from original api_sync to allow background execution.
     Updates job progress if job_id provided.
     Returns {"added": int, "total_fetched": int}
@@ -200,7 +200,7 @@ def _perform_sync_internal(effective_email: str, job_id: Optional[str] = None) -
 
     _progress("Fetching message list from Gmail")
     try:
-        results = service.users().messages().list(userId="me", maxResults=15).execute()
+        results = service.users().messages().list(userId="me", maxResults=100).execute()
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Gmail API list error: {e}")
     messages = results.get("messages", []) if isinstance(results, dict) else []
@@ -993,10 +993,10 @@ async def api_query(request: QueryRequest, email: Optional[str] = Query(None)) -
     prompt = build_prompt(question, context)
 
     # --- Add 40-Second Timeout Safeguard around Gemini (safely below Render 50s cutoff) ---
-    # Using flash model (gemini-1.5-flash) cuts inference to 1-3s vs 15-30s for pro models
+    # Using flash model (gemini-3.6-flash)
     try:
         response = await asyncio.wait_for(
-            asyncio.to_thread(lambda: gemini_client.models.generate_content(model="gemini-1.5-flash", contents=prompt)),
+            asyncio.to_thread(lambda: gemini_client.models.generate_content(model="gemini-3.6-flash", contents=prompt)),
             timeout=40.0,
         )
         # Response may be object with .text or dict-like

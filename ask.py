@@ -84,7 +84,7 @@ def build_prompt(query: str, context: str) -> str:
 
 
 def generate_answer(query: str, context: str) -> Optional[str]:
-    """Call gemini-1.5-flash with the structured prompt and return the answer (flash = 1-3s vs 15-30s for pro)."""
+    """Call gemini-3.6-flash with the structured prompt and return the answer."""
     if not context or context.strip() == "":
         return "I could not find that in your emails."
 
@@ -93,7 +93,7 @@ def generate_answer(query: str, context: str) -> Optional[str]:
 
     try:
         response = client.models.generate_content(
-            model="gemini-1.5-flash",
+            model="gemini-3.6-flash",
             contents=prompt,
         )
         return response.text
