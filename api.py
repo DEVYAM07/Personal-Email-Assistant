@@ -159,7 +159,7 @@ def _find_latest_job_for_email(email: str) -> Optional[dict[str, Any]]:
 
 def _perform_sync_internal(effective_email: str, job_id: Optional[str] = None) -> dict[str, Any]:
     """
-    Synchronous sync work: fetch batch emails (SYNC_BATCH_SIZE env, default 15 for Render 512MB), dedup, insert SQLite, chunk, embed, upsert.
+    Synchronous sync work: fetch batch emails (SYNC_BATCH_SIZE env, default 100), dedup, insert SQLite, chunk, embed, upsert.
     Extracted from original api_sync to allow background execution.
     Updates job progress if job_id provided.
     Returns {"added": int, "total_fetched": int}
@@ -200,7 +200,7 @@ def _perform_sync_internal(effective_email: str, job_id: Optional[str] = None) -
 
     _progress("Fetching message list from Gmail")
     try:
-        sync_batch_size = int(os.getenv("SYNC_BATCH_SIZE", "15"))
+        sync_batch_size = int(os.getenv("SYNC_BATCH_SIZE", "100"))
         results = service.users().messages().list(userId="me", maxResults=sync_batch_size).execute()
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Gmail API list error: {e}")

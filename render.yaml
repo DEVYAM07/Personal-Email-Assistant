@@ -21,7 +21,7 @@ services:
       - key: FRONTEND_URL
         sync: false
       - key: SYNC_BATCH_SIZE
-        value: 15
+        value: 100
       - key: DB_PATH
         value: ./emails.db
       - key: CHROMA_DB_PATH

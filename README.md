@@ -12,7 +12,7 @@ Frontend: Vite + React → Vercel
 
 See `DEPLOYMENT.md` for Render + Vercel guide. Summary:
 1. Render → New Web Service → connect repo, `pip install -r requirements.txt`, `uvicorn main:app --host 0.0.0.0 --port $PORT`, health `/api/health`
-2. Set Render env: `GEMINI_API_KEY`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `REDIRECT_URI` (your Render URL `/api/auth/callback`), `FRONTEND_URL` (your Vercel URL), `SYNC_BATCH_SIZE=15`
+2. Set Render env: `GEMINI_API_KEY`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `REDIRECT_URI` (your Render URL `/api/auth/callback`), `FRONTEND_URL` (your Vercel URL), `SYNC_BATCH_SIZE=100`
 3. Google Console → OAuth Client → add redirect `REDIRECT_URI` + origin `FRONTEND_URL`
 4. Vercel → import `frontend/`, set `VITE_API_URL` (your Render URL) → redeploy
 
@@ -26,7 +26,7 @@ cd frontend && echo "VITE_API_URL=http://localhost:8000" > .env.local && npm run
 ```
 
 ## Sync & Memory
-- `SYNC_BATCH_SIZE` env default `15` in `api.py:203` and `fetch_emails.py:69` prevents OOM on Render 512MB
+- `SYNC_BATCH_SIZE` env default `100` in `api.py:203` and `fetch_emails.py:69` (full sync, remote Gemini embeddings keep RAM low)
 - Background `202 Accepted` on `POST /api/sync` (poll `GET /api/sync/status`) avoids proxy timeouts
 - Remote Gemini embeddings `models/text-embedding-004` (`api.py:363`) keeps ChromaDB off ONNX/PyTorch for low RAM
 

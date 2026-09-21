@@ -32,7 +32,7 @@ This repo is split:
    GOOGLE_CLIENT_SECRET=...
    REDIRECT_URI=https://your-backend.onrender.com/api/auth/callback
    FRONTEND_URL=https://your-frontend.vercel.app
-   SYNC_BATCH_SIZE=15
+   SYNC_BATCH_SIZE=100
    DB_PATH=./emails.db
    CHROMA_DB_PATH=./chroma_db
    ```
@@ -45,7 +45,7 @@ This repo is split:
 - Health check: `/api/health`
 - Env: same as above; no persistent disk needed for free tier (ephemeral FS). For persistence later, add disk `/data`.
 
-> **Render Free 512MB:** `SYNC_BATCH_SIZE=15` caps Gmail fetch to prevent OOM (api.py via `SYNC_BATCH_SIZE`). Background `202` on `/api/sync` avoids gateway timeouts.
+> **Full sync 100 emails:** `SYNC_BATCH_SIZE=100` (default) uses remote `text-embedding-004` to keep RAM low; background `202` on `/api/sync` avoids gateway timeouts.
 
 ---
 
@@ -107,7 +107,7 @@ cd frontend && npm run build && npm run preview
 | `CORS blocked` | Ensure `FRONTEND_URL` is set to your Vercel URL; backend reads it dynamically via `os.environ.get("FRONTEND_URL", "http://localhost:5173")`. Check `CORS_ALLOWED_ORIGINS` extra. |
 | `redirect_uri_mismatch` | `REDIRECT_URI` env must equal Google Console URI exactly (including `https` and trailing path). |
 | `No refresh token` | OAuth URL uses `access_type=offline` & `prompt=consent` (`api.py:691`). Clear prior grant and re-auth. |
-| `OOM on sync` | Keep `SYNC_BATCH_SIZE=15` (default) for 512MB; 100 will OOM. Uses remote `text-embedding-004` to avoid local ONNX/Torch. |
+| `OOM on sync` | Uses remote `text-embedding-004` to avoid local ONNX/Torch; `SYNC_BATCH_SIZE=100` is now safe with remote embeddings. Lower to `15` if RAM issues persist. |
 | `VITE_API_URL not applied` | Vercel needs redeploy after env change; `VITE_` prefix required, no trailing slash. |
 | `Render sleeps` | Free tier spins down → cold start ~30s; consider UptimeRobot or upgrade. |
 
