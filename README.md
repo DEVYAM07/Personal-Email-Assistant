@@ -1,7 +1,7 @@
 ---
 title: AI Email Assistant Backend Service
 sdk: gradio
-sdk_version: 4.44.1
+sdk_version: 6.28.0
 app_file: app.py
 pinned: false
 ---
@@ -26,7 +26,7 @@ See `DEPLOYMENT.md:22` for full guide. Summary:
 
 ## Local Dev
 ```bash
-pip install -r requirements.txt  # includes gradio==4.44.1
+pip install -r requirements.txt  # includes gradio==6.28.0
 uvicorn app:app --host 0.0.0.0 --port 7860  # Gradio+FastAPI
 # or
 uvicorn api:app --host 0.0.0.0 --port 8000
