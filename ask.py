@@ -150,13 +150,21 @@ def retrieve_relevant_emails(
     query_embedding = _embed_query_gemini(query, gemini_client=gemini_client)
 
     if query_embedding is not None:
-        # Query via precomputed embedding - no embedding_function needed (avoids ST load)
+        # Query via precomputed embedding - Disable Local ML Models: embedding_function=None (avoids ST load)
+        # Optimized for 512MB: collection name="emails" with explicit Gemini embeddings
         try:
+            # Try optimized collection "emails" with embedding_function=None first
             try:
-                collection = chroma_client.get_collection(name="email_vectors")
+                collection = chroma_client.get_collection(name="emails")
             except Exception:
-                # Fallback if collection needs embedding_function for metadata
-                collection = chroma_client.get_or_create_collection(name="email_vectors")
+                # Fallback: try legacy name or create optimized collection
+                try:
+                    collection = chroma_client.get_collection(name="email_vectors")
+                except Exception:
+                    collection = chroma_client.get_or_create_collection(
+                        name="emails",
+                        embedding_function=None
+                    )
             results = collection.query(
                 query_embeddings=[query_embedding],
                 n_results=n_results,
@@ -169,9 +177,15 @@ def retrieve_relevant_emails(
                 print(f"⚠️ Gemini query dimension mismatch ({e}), falling back to ST", file=sys.stderr)
                 try:
                     embedding_fn = get_embedding_function()
-                    collection = chroma_client.get_collection(
-                        name="email_vectors", embedding_function=embedding_fn
-                    )
+                    # Try both collection names for fallback
+                    try:
+                        collection = chroma_client.get_collection(
+                            name="emails", embedding_function=embedding_fn
+                        )
+                    except Exception:
+                        collection = chroma_client.get_collection(
+                            name="email_vectors", embedding_function=embedding_fn
+                        )
                     results = collection.query(
                         query_texts=[query],
                         n_results=n_results,
@@ -180,9 +194,14 @@ def retrieve_relevant_emails(
                     # If collection empty or not found, try or_create
                     try:
                         embedding_fn = get_embedding_function()
-                        collection = chroma_client.get_or_create_collection(
-                            name="email_vectors", embedding_function=embedding_fn
-                        )
+                        try:
+                            collection = chroma_client.get_or_create_collection(
+                                name="emails", embedding_function=embedding_fn
+                            )
+                        except Exception:
+                            collection = chroma_client.get_or_create_collection(
+                                name="email_vectors", embedding_function=embedding_fn
+                            )
                         results = collection.query(
                             query_texts=[query],
                             n_results=n_results,

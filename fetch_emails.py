@@ -67,9 +67,9 @@ def extract_body(payload):
 
 
 def fetch_recent_emails(service, max_results=None, days_back=7):
-    """Fetch emails from the last N days."""
-    # Full sync batch 100 (SYNC_BATCH_SIZE env, default 100)
-    default_batch = int(os.getenv("SYNC_BATCH_SIZE", "100"))
+    """Fetch emails from the last N days - optimized for Render 512MB (batch 15)."""
+    # Optimized sync batch 15 for 512MB / 0.1 vCPU (was 100, OOM on Render free)
+    default_batch = int(os.getenv("SYNC_BATCH_SIZE", "15"))
     if max_results is None:
         max_results = default_batch
     else:
@@ -166,10 +166,10 @@ def store_emails(emails):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Fetch emails from Gmail and store to SQLite"
+        description="Fetch emails from Gmail and store to SQLite (512MB optimized, batch 15)"
     )
     parser.add_argument(
-        "--max", type=int, default=int(os.getenv("SYNC_BATCH_SIZE", "100")), help="Max emails to fetch"
+        "--max", type=int, default=int(os.getenv("SYNC_BATCH_SIZE", "15")), help="Max emails to fetch"
     )
     parser.add_argument(
         "--days", type=int, default=7, help="Fetch emails from last N days"

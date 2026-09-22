@@ -159,7 +159,7 @@ def _find_latest_job_for_email(email: str) -> Optional[dict[str, Any]]:
 
 def _perform_sync_internal(effective_email: str, job_id: Optional[str] = None) -> dict[str, Any]:
     """
-    Synchronous sync work: fetch batch emails (SYNC_BATCH_SIZE env, default 100), dedup, insert SQLite, chunk, embed, upsert.
+    Synchronous sync work: fetch batch emails (SYNC_BATCH_SIZE env, default 15), dedup, insert SQLite, chunk, embed, upsert.
     Extracted from original api_sync to allow background execution.
     Updates job progress if job_id provided.
     Returns {"added": int, "total_fetched": int}
@@ -200,7 +200,7 @@ def _perform_sync_internal(effective_email: str, job_id: Optional[str] = None) -
 
     _progress("Fetching message list from Gmail")
     try:
-        sync_batch_size = int(os.getenv("SYNC_BATCH_SIZE", "100"))
+        sync_batch_size = int(os.getenv("SYNC_BATCH_SIZE", "15"))
         results = service.users().messages().list(userId="me", maxResults=sync_batch_size).execute()
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Gmail API list error: {e}")
@@ -295,19 +295,33 @@ def _perform_sync_internal(effective_email: str, job_id: Optional[str] = None) -
         if embedding_fn is not None:
             collection = chroma_client.get_or_create_collection(name="email_vectors", embedding_function=embedding_fn)
         else:
-            # Gemini path: no embedding_function needed when we supply embeddings explicitly
+            # Gemini path: Disable Local ML Models - explicit embedding_function=None, batch 15 optimized for 512MB
+            # Required by task: collection = chroma_client.get_or_create_collection(name="emails", embedding_function=None)
             try:
-                collection = chroma_client.get_or_create_collection(name="email_vectors")
+                collection = chroma_client.get_or_create_collection(
+                    name="emails",
+                    embedding_function=None
+                )
             except Exception:
-                # Fallback for Chroma versions that require embedding_function
-                if embedding_fn is None:
+                # Fallback for Chroma versions that require embedding_function, or handle legacy "email_vectors"
+                try:
+                    collection = chroma_client.get_collection(name="emails")
+                except Exception:
                     try:
-                        from ask import get_embedding_function as _lazy_ef
-                        embedding_fn = _lazy_ef()
+                        collection = chroma_client.get_or_create_collection(name="emails", embedding_function=None)
                     except Exception:
-                        from vector_store import get_embedding_function as _vs_ef2
-                        embedding_fn = _vs_ef2()
-                collection = chroma_client.get_or_create_collection(name="email_vectors", embedding_function=embedding_fn)
+                        # Fallback to legacy collection name if needed
+                        try:
+                            collection = chroma_client.get_or_create_collection(name="email_vectors")
+                        except Exception:
+                            if embedding_fn is None:
+                                try:
+                                    from ask import get_embedding_function as _lazy_ef
+                                    embedding_fn = _lazy_ef()
+                                except Exception:
+                                    from vector_store import get_embedding_function as _vs_ef2
+                                    embedding_fn = _vs_ef2()
+                            collection = chroma_client.get_or_create_collection(name="email_vectors", embedding_function=embedding_fn)
     except Exception as e:
         # Final fallback: ensure we have chroma_client and embedding_fn lazily
         try:
@@ -322,7 +336,10 @@ def _perform_sync_internal(effective_email: str, job_id: Optional[str] = None) -
                 collection = chroma_client.get_or_create_collection(name="email_vectors", embedding_function=embedding_fn)
             else:
                 try:
-                    collection = chroma_client.get_or_create_collection(name="email_vectors")
+                    collection = chroma_client.get_or_create_collection(
+                        name="emails",
+                        embedding_function=None
+                    )
                 except Exception:
                     if embedding_fn is None:
                         try:
@@ -430,27 +447,31 @@ def _perform_sync_internal(effective_email: str, job_id: Optional[str] = None) -
                     except Exception as e:
                         err_lower = str(e).lower()
                         if "dimension" in err_lower or "expecting embedding" in err_lower:
-                            # Mismatched collection (384 vs 768) - recreate for Gemini dimensions
+                            # Mismatched collection (384 vs 768) - recreate for Gemini dimensions (optimized: embedding_function=None)
                             print(f"⚠️ Dimension mismatch on upsert {doc_id}: {e}, recreating collection for Gemini", file=sys.stderr)
                             try:
-                                # Delete old collection with ST dimensions
+                                # Delete old collection(s) with ST dimensions - try both names
+                                for _old_name in ["email_vectors", "emails"]:
+                                    try:
+                                        chroma_client.delete_collection(name=_old_name)
+                                    except Exception:
+                                        pass
+                                # Recreate with Disable Local ML Models pattern: embedding_function=None
                                 try:
-                                    chroma_client.delete_collection(name="email_vectors")
-                                except Exception:
-                                    pass
-                                # Recreate without embedding_function (since we supply embeddings)
-                                try:
-                                    collection = chroma_client.get_or_create_collection(name="email_vectors")
+                                    collection = chroma_client.get_or_create_collection(
+                                        name="emails",
+                                        embedding_function=None
+                                    )
                                 except Exception:
                                     # Fallback if Chroma requires function
                                     try:
                                         from ask import get_embedding_function as _lazy_recreate
                                         _tmp_fn = _lazy_recreate()
                                         collection = chroma_client.get_or_create_collection(
-                                            name="email_vectors", embedding_function=_tmp_fn
+                                            name="emails", embedding_function=_tmp_fn
                                         )
                                     except Exception:
-                                        collection = chroma_client.create_collection(name="email_vectors")
+                                        collection = chroma_client.create_collection(name="emails")
                                 # Retry upsert after recreation
                                 collection.upsert(
                                     ids=[doc_id],
