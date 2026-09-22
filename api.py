@@ -249,13 +249,33 @@ def _perform_sync_internal(effective_email: str, job_id: Optional[str] = None) -
         return {"added": 0, "total_fetched": total_fetched}
     _progress(f"Found {len(new_ids)} new emails — initializing vector store")
 
-    # --- ChromaDB setup: use existing collection with Gemini/SentenceTransformer embeddings ---
+    # --- ChromaDB setup: lazy ST, prefer Gemini embeddings to avoid 230MB torch load on 512MB free tier ---
+    # Order: try Gemini first; only load ST if Gemini unavailable (saves RSS and startup time)
+    gemini_client = None
+    try:
+        import ask as _ask_mod_gem
+        _maybe_mocked_gem = globals().get("get_gemini_client")
+        if _maybe_mocked_gem and hasattr(_maybe_mocked_gem, "assert_called"):
+            gemini_client = _maybe_mocked_gem()
+        else:
+            try:
+                gemini_client = _ask_mod_gem.get_gemini_client()
+            except SystemExit:
+                gemini_client = None
+            except Exception:
+                gemini_client = None
+    except Exception:
+        gemini_client = None
+
+    embedding_fn = None
+    chroma_client = None
+    collection = None
     try:
         import ask as _ask_mod_sync
-        try:
-            _maybe_mocked_chroma = globals().get("get_chroma_client")
-            if _maybe_mocked_chroma is not None and hasattr(_maybe_mocked_chroma, "assert_called"):
-                chroma_client = _maybe_mocked_chroma()
+        _maybe_mocked_chroma = globals().get("get_chroma_client")
+        if _maybe_mocked_chroma is not None and hasattr(_maybe_mocked_chroma, "assert_called"):
+            chroma_client = _maybe_mocked_chroma()
+            if gemini_client is None:
                 _maybe_mocked_ef = globals().get("get_embedding_function")
                 if _maybe_mocked_ef and hasattr(_maybe_mocked_ef, "assert_called"):
                     embedding_fn = _maybe_mocked_ef()
@@ -264,34 +284,56 @@ def _perform_sync_internal(effective_email: str, job_id: Optional[str] = None) -
                 else:
                     from vector_store import get_embedding_function as _vs_ef
                     embedding_fn = _vs_ef()
-            else:
-                chroma_client = _ask_mod_sync.get_chroma_client()
+        else:
+            chroma_client = _ask_mod_sync.get_chroma_client()
+            if gemini_client is None:
                 if hasattr(_ask_mod_sync, "get_embedding_function"):
                     embedding_fn = _ask_mod_sync.get_embedding_function()
                 else:
                     from vector_store import get_embedding_function as _vs_ef
                     embedding_fn = _vs_ef()
-        except Exception:
-            chroma_client = get_chroma_client()
-            embedding_fn = get_embedding_function()
-        collection = chroma_client.get_or_create_collection(
-            name="email_vectors", embedding_function=embedding_fn
-        )
-    except Exception as e:
-        conn.close()
-        raise HTTPException(status_code=500, detail=f"ChromaDB initialization error: {e}")
-
-    # Try to obtain Gemini client for Gemini embeddings (fallback to Chroma embedding_function)
-    gemini_client = None
-    try:
-        import ask as _ask_mod_gem
-        _maybe_mocked_gem = globals().get("get_gemini_client")
-        if _maybe_mocked_gem and hasattr(_maybe_mocked_gem, "assert_called"):
-            gemini_client = _maybe_mocked_gem()
+        if embedding_fn is not None:
+            collection = chroma_client.get_or_create_collection(name="email_vectors", embedding_function=embedding_fn)
         else:
-            gemini_client = _ask_mod_gem.get_gemini_client()
-    except Exception:
-        gemini_client = None
+            # Gemini path: no embedding_function needed when we supply embeddings explicitly
+            try:
+                collection = chroma_client.get_or_create_collection(name="email_vectors")
+            except Exception:
+                # Fallback for Chroma versions that require embedding_function
+                if embedding_fn is None:
+                    try:
+                        from ask import get_embedding_function as _lazy_ef
+                        embedding_fn = _lazy_ef()
+                    except Exception:
+                        from vector_store import get_embedding_function as _vs_ef2
+                        embedding_fn = _vs_ef2()
+                collection = chroma_client.get_or_create_collection(name="email_vectors", embedding_function=embedding_fn)
+    except Exception as e:
+        # Final fallback: ensure we have chroma_client and embedding_fn lazily
+        try:
+            if chroma_client is None:
+                chroma_client = get_chroma_client()
+            if gemini_client is None and embedding_fn is None:
+                try:
+                    embedding_fn = get_embedding_function()
+                except Exception:
+                    from vector_store import get_embedding_function as _vs_ef3
+                    embedding_fn = _vs_ef3()
+                collection = chroma_client.get_or_create_collection(name="email_vectors", embedding_function=embedding_fn)
+            else:
+                try:
+                    collection = chroma_client.get_or_create_collection(name="email_vectors")
+                except Exception:
+                    if embedding_fn is None:
+                        try:
+                            embedding_fn = get_embedding_function()
+                        except Exception:
+                            from vector_store import get_embedding_function as _vs_ef4
+                            embedding_fn = _vs_ef4()
+                    collection = chroma_client.get_or_create_collection(name="email_vectors", embedding_function=embedding_fn)
+        except Exception as e2:
+            conn.close()
+            raise HTTPException(status_code=500, detail=f"ChromaDB initialization error: {e2}")
 
     added = 0
 
@@ -378,18 +420,57 @@ def _perform_sync_internal(effective_email: str, job_id: Optional[str] = None) -
 
             try:
                 if gemini_embedding is not None:
-                    collection.upsert(
-                        ids=[doc_id],
-                        documents=[doc_text],
-                        metadatas=[metadata],
-                        embeddings=[gemini_embedding],
-                    )
+                    try:
+                        collection.upsert(
+                            ids=[doc_id],
+                            documents=[doc_text],
+                            metadatas=[metadata],
+                            embeddings=[gemini_embedding],
+                        )
+                    except Exception as e:
+                        err_lower = str(e).lower()
+                        if "dimension" in err_lower or "expecting embedding" in err_lower:
+                            # Mismatched collection (384 vs 768) - recreate for Gemini dimensions
+                            print(f"⚠️ Dimension mismatch on upsert {doc_id}: {e}, recreating collection for Gemini", file=sys.stderr)
+                            try:
+                                # Delete old collection with ST dimensions
+                                try:
+                                    chroma_client.delete_collection(name="email_vectors")
+                                except Exception:
+                                    pass
+                                # Recreate without embedding_function (since we supply embeddings)
+                                try:
+                                    collection = chroma_client.get_or_create_collection(name="email_vectors")
+                                except Exception:
+                                    # Fallback if Chroma requires function
+                                    try:
+                                        from ask import get_embedding_function as _lazy_recreate
+                                        _tmp_fn = _lazy_recreate()
+                                        collection = chroma_client.get_or_create_collection(
+                                            name="email_vectors", embedding_function=_tmp_fn
+                                        )
+                                    except Exception:
+                                        collection = chroma_client.create_collection(name="email_vectors")
+                                # Retry upsert after recreation
+                                collection.upsert(
+                                    ids=[doc_id],
+                                    documents=[doc_text],
+                                    metadatas=[metadata],
+                                    embeddings=[gemini_embedding],
+                                )
+                            except Exception as e2:
+                                conn.close()
+                                raise HTTPException(status_code=500, detail=f"ChromaDB upsert error for {mid} after recreation: {e2}")
+                        else:
+                            raise
                 else:
                     collection.upsert(
                         ids=[doc_id],
                         documents=[doc_text],
                         metadatas=[metadata],
                     )
+            except HTTPException:
+                raise
             except Exception as e:
                 conn.close()
                 raise HTTPException(status_code=500, detail=f"ChromaDB upsert error for {mid}: {e}")
@@ -937,23 +1018,35 @@ async def api_query(request: QueryRequest, email: Optional[str] = Query(None)) -
         except Exception:
             pass
 
-    # --- Offload blocking Vector DB calls to thread pool and enforce timeout ---
+    # --- Offload blocking Vector DB calls to thread pool and enforce timeout (512MB-optimized: total <45s) ---
     # Cap n_results to max 3 to prevent prompt payloads from exceeding token/memory limits
     # Trim Context to Top 3 Emails: fewer tokens dramatically cuts Gemini latency (flash model)
     MAX_RESULTS = 3
     n_results = min(3, MAX_RESULTS)
 
     try:
-        # Offload Chroma client initialization to thread pool (includes heavy embedding model load)
+        # Use cached Chroma client (avoids re-loading embedding model per request)
+        # get_chroma_client is now cached; still offload to thread to avoid blocking event loop
         chroma_client = await asyncio.to_thread(get_chroma_client)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"ChromaDB client error: {e}")
 
+    # Prefetch Gemini client once (cached) to pass to retrieval for Gemini embeddings (avoids ST torch load ~230MB)
+    gemini_client_for_retrieval = None
     try:
-        # Offload synchronous ChromaDB query which blocks event loop; cap context size and add 15s safeguard
+        gemini_client_for_retrieval = await asyncio.to_thread(get_gemini_client)
+    except Exception:
+        gemini_client_for_retrieval = None
+
+    try:
+        # Offload synchronous ChromaDB query; prefer Gemini embeddings (no ST). Cap 10s to stay < Render 50s (10+30=40)
         documents, metadatas, ids = await asyncio.wait_for(
-            asyncio.to_thread(lambda: retrieve_relevant_emails(question, n_results=n_results, client=chroma_client)),
-            timeout=15.0,
+            asyncio.to_thread(
+                lambda: retrieve_relevant_emails(
+                    question, n_results=n_results, client=chroma_client, gemini_client=gemini_client_for_retrieval
+                )
+            ),
+            timeout=10.0,
         )
     except asyncio.TimeoutError:
         # Return proper JSON instead of hanging until Render kills connection
@@ -985,19 +1078,23 @@ async def api_query(request: QueryRequest, email: Optional[str] = Query(None)) -
         for meta in capped_metadatas
     ]
 
+    # Reuse already-fetched Gemini client (cached) or fetch if retrieval had no key
     try:
-        gemini_client = await asyncio.to_thread(get_gemini_client)
+        gemini_client = gemini_client_for_retrieval or await asyncio.to_thread(get_gemini_client)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Gemini client error: {e}")
 
     prompt = build_prompt(question, context)
 
-    # --- Add 40-Second Timeout Safeguard around Gemini (safely below Render 50s cutoff) ---
-    # Using flash model (gemini-3.6-flash)
+    # --- Add 30-Second Timeout Safeguard around Gemini (safely below Render 50s cutoff: 10+30=40) ---
+    # Use env-driven model (ask.GEMINI_FLASH_MODEL) default gemini-2.0-flash
     try:
+        import ask as _ask_model_mod
+
+        _flash_model = getattr(_ask_model_mod, "GEMINI_FLASH_MODEL", "gemini-2.0-flash")
         response = await asyncio.wait_for(
-            asyncio.to_thread(lambda: gemini_client.models.generate_content(model="gemini-3.6-flash", contents=prompt)),
-            timeout=40.0,
+            asyncio.to_thread(lambda: gemini_client.models.generate_content(model=_flash_model, contents=prompt)),
+            timeout=30.0,
         )
         # Response may be object with .text or dict-like
         answer = getattr(response, "text", None)

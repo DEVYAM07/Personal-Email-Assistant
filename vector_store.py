@@ -1,9 +1,14 @@
 import os
 import sqlite3
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import chromadb
-from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
+
+# Lazy cache for embedding function (avoid torch load at import on 512MB Render)
+_EMBEDDING_FN_CACHE = None
+_EMBEDDING_FN_NAME: Optional[str] = None
+_CHROMA_CLIENT_CACHE: Optional[chromadb.PersistentClient] = None
+_CHROMA_CLIENT_PATH: Optional[str] = None
 
 
 def fetch_emails(db_path: str = None) -> List[Dict[str, Any]]:
@@ -29,15 +34,29 @@ def fetch_emails(db_path: str = None) -> List[Dict[str, Any]]:
 
 
 def init_chroma_client(db_path: str = None) -> chromadb.PersistentClient:
-    """Initialize a ChromaDB PersistentClient."""
+    """Initialize a cached ChromaDB PersistentClient (512MB-friendly)."""
+    global _CHROMA_CLIENT_CACHE, _CHROMA_CLIENT_PATH
     if db_path is None:
         db_path = os.getenv("CHROMA_DB_PATH") or os.getenv("CHROMA_PATH") or "./chroma_db"
-    return chromadb.PersistentClient(path=db_path)
+    if _CHROMA_CLIENT_CACHE is not None and _CHROMA_CLIENT_PATH == db_path:
+        return _CHROMA_CLIENT_CACHE
+    client = chromadb.PersistentClient(path=db_path)
+    _CHROMA_CLIENT_CACHE = client
+    _CHROMA_CLIENT_PATH = db_path
+    return client
 
 
-def get_embedding_function() -> SentenceTransformerEmbeddingFunction:
-    """Return a SentenceTransformerEmbeddingFunction with the all-MiniLM-L6-v2 model."""
-    return SentenceTransformerEmbeddingFunction(model_name="all-MiniLM-L6-v2")
+def get_embedding_function(model_name: str = "all-MiniLM-L6-v2"):
+    """Lazy-load SentenceTransformerEmbeddingFunction (avoids torch at import)."""
+    global _EMBEDDING_FN_CACHE, _EMBEDDING_FN_NAME
+    if _EMBEDDING_FN_CACHE is not None and _EMBEDDING_FN_NAME == model_name:
+        return _EMBEDDING_FN_CACHE
+    from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
+
+    fn = SentenceTransformerEmbeddingFunction(model_name=model_name)
+    _EMBEDDING_FN_CACHE = fn
+    _EMBEDDING_FN_NAME = model_name
+    return fn
 
 
 def upsert_emails(
