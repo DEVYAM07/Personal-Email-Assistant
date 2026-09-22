@@ -1210,11 +1210,11 @@ async def api_query(request: QueryRequest, email: Optional[str] = Query(None)) -
     prompt = build_prompt(question, context)
 
     # --- Add 30-Second Timeout Safeguard around Gemini (safely below Render 50s cutoff: 10+30=40) ---
-    # Use env-driven model (ask.GEMINI_FLASH_MODEL) default gemini-2.0-flash
+    # Use env-driven model (ask.GEMINI_FLASH_MODEL) default gemini-3.6-flash
     try:
         import ask as _ask_model_mod
 
-        _flash_model = getattr(_ask_model_mod, "GEMINI_FLASH_MODEL", "gemini-2.0-flash")
+        _flash_model = getattr(_ask_model_mod, "GEMINI_FLASH_MODEL", "gemini-3.6-flash")
         response = await asyncio.wait_for(
             asyncio.to_thread(lambda: gemini_client.models.generate_content(model=_flash_model, contents=prompt)),
             timeout=30.0,

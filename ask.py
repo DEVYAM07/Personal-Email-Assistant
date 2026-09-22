@@ -263,7 +263,7 @@ def build_prompt(query: str, context: str) -> str:
     )
 
 
-GEMINI_FLASH_MODEL = os.getenv("GEMINI_MODEL") or os.getenv("GEMINI_FLASH_MODEL") or "gemini-2.0-flash"
+GEMINI_FLASH_MODEL = os.getenv("GEMINI_MODEL") or os.getenv("GEMINI_FLASH_MODEL") or "gemini-3.6-flash"
 
 
 def generate_answer(query: str, context: str) -> Optional[str]:
