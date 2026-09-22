@@ -1,5 +1,5 @@
 import os
-from fastapi import FastAPI
+from fastapi import FastAPI, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI(title="Personal Email Assistant API")
@@ -40,6 +40,36 @@ try:
     app = api_app
 except ImportError:
     pass
+
+# --- Task: Async Background Processing for 512MB (fix 3/15 stall) ---
+# Use FastAPI BackgroundTasks to return 202 immediately, avoid 30s polling timeout
+def run_email_sync_pipeline():
+    """Background sync pipeline - delegates to optimized sync.py (batch Gemini)."""
+    try:
+        # Import here to avoid circular
+        from sync import sync_emails_batch
+        import sqlite3
+        DB_PATH = os.getenv("DB_PATH") or os.path.join(os.path.dirname(__file__), "emails.db")
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
+        cur.execute("SELECT id, subject, from_addr, date, body, snippet FROM emails LIMIT 15")
+        rows = cur.fetchall()
+        conn.close()
+        if rows:
+            emails = [
+                {"id": r[0], "subject": r[1], "from_addr": r[2], "date": r[3], "body": r[4], "snippet": r[5]}
+                for r in rows
+            ]
+            sync_emails_batch(emails)
+    except Exception as e:
+        print(f"Background sync error: {e}")
+
+
+@app.post("/api/sync")
+async def sync_emails(background_tasks: BackgroundTasks):
+    # Trigger background processing without blocking HTTP response
+    background_tasks.add_task(run_email_sync_pipeline)
+    return {"status": "started", "message": "Syncing emails in background"}
 
 if __name__ == "__main__":
     import uvicorn
