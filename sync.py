@@ -8,6 +8,7 @@ Runs within 0.1 vCPU / 512MB by:
 """
 
 import os
+import sys
 import sqlite3
 from datetime import datetime
 from typing import Dict, Any, List, Optional
