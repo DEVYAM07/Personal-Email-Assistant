@@ -8,6 +8,7 @@ Runs within 0.1 vCPU / 512MB by:
 """
 
 import os
+import sys
 import sqlite3
 from datetime import datetime
 from typing import Dict, Any, List, Optional
@@ -170,9 +171,9 @@ def sync_emails_batch(
                 else:
                     # Fallback to per-item client method if batch not supported
                     raise ValueError("Batch response unexpected, fallback to per-chunk")
-                # Store pre-computed vectors directly in Chroma (task spec)
-                # Using collection.add with batch embeddings
-                collection.add(
+                # Store pre-computed vectors directly in Chroma (task spec) - use upsert for idempotency
+                # Replace collection.add with collection.upsert and deterministic IDs
+                collection.upsert(
                     ids=doc_ids,
                     embeddings=embeddings,
                     documents=doc_texts,
@@ -192,7 +193,7 @@ def sync_emails_batch(
                         embeddings = [e["values"] for e in batch_res["embeddings"]]
                     else:
                         raise ValueError("Batch embed fallback failed")
-                    collection.add(
+                    collection.upsert(
                         ids=doc_ids,
                         embeddings=embeddings,
                         documents=doc_texts,
@@ -272,8 +273,8 @@ def batch_sync_with_gemini(emails_batch: List[Dict[str, Any]], collection=None):
     # Extract vector list
     embeddings = [item for item in response["embedding"]]
 
-    # Store pre-computed vectors directly in Chroma
-    collection.add(
+    # Store pre-computed vectors directly in Chroma - use upsert with deterministic IDs for dedup
+    collection.upsert(
         ids=[email["id"] for email in emails_batch],
         embeddings=embeddings,
         documents=email_texts,
