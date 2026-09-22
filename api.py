@@ -432,7 +432,7 @@ def _perform_sync_internal(effective_email: str, job_id: Optional[str] = None) -
                 genai_batch.configure(api_key=os.getenv("GEMINI_API_KEY"))
                 email_texts = [d["doc_text"] for d in pending_docs]
                 response = genai_batch.embed_content(
-                    model="models/text-embedding-004",
+                    model="models/gemini-embedding-001",
                     content=email_texts
                 )
                 if isinstance(response, dict) and "embedding" in response:
@@ -467,7 +467,7 @@ def _perform_sync_internal(effective_email: str, job_id: Optional[str] = None) -
                 # Fallback: try google.genai batch via contents list
                 try:
                     email_texts = [d["doc_text"] for d in pending_docs]
-                    batch_res = gemini_client.models.embed_content(model="models/text-embedding-004", contents=email_texts)  # type: ignore
+                    batch_res = gemini_client.models.embed_content(model="models/gemini-embedding-001", contents=email_texts)  # type: ignore
                     if hasattr(batch_res, "embeddings"):
                         vals = getattr(batch_res, "embeddings")
                         embeddings = [getattr(v, "values", v) if not isinstance(v, dict) else v.get("values", v) for v in vals]
@@ -496,7 +496,7 @@ def _perform_sync_internal(effective_email: str, job_id: Optional[str] = None) -
                         gemini_embedding = None
                         try:
                             emb_res = gemini_client.models.embed_content(  # type: ignore[attr-defined]
-                                model="text-embedding-004",
+                                model="gemini-embedding-001",
                                 contents=d["doc_text"],
                             )
                             if isinstance(emb_res, dict) and "embeddings" in emb_res:
@@ -1137,7 +1137,7 @@ async def api_query(request: QueryRequest, email: Optional[str] = Query(None)) -
             embedding_function=None
         )
         query_response = genai.embed_content(
-            model="models/text-embedding-004",
+            model="models/gemini-embedding-001",
             content=user_query
         )
         query_vector = query_response['embedding']

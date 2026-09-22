@@ -3,7 +3,7 @@ Optimized Email Sync Pipeline for Render 512MB RAM Limit
 
 Runs within 0.1 vCPU / 512MB by:
 - Batch size 15 (was 100)
-- Explicit Gemini embeddings via models/text-embedding-004 (no local ST)
+- Explicit Gemini embeddings via models/gemini-embedding-001 (no local ST)
 - Chroma collection with embedding_function=None
 """
 
@@ -80,11 +80,11 @@ def get_chroma_collection():
 
 
 def embed_with_gemini(text: str, gemini_client: Optional[genai.Client] = None) -> List[float]:
-    """Calculate embedding via Google Gemini models/text-embedding-004 API."""
+    """Calculate embedding via Google Gemini models/gemini-embedding-001 API."""
     client = gemini_client or get_gemini_client()
-    # Explicit Gemini embeddings via genai.embed_content (models/text-embedding-004)
+    # Explicit Gemini embeddings via genai.embed_content (models/gemini-embedding-001)
     result = client.models.embed_content(
-        model="models/text-embedding-004",
+        model="models/gemini-embedding-001",
         contents=text,
     )
     # Handle SDK response shapes
@@ -157,7 +157,7 @@ def sync_emails_batch(
                 import google.generativeai as genai_batch
                 genai_batch.configure(api_key=os.getenv("GEMINI_API_KEY"))
                 response = genai_batch.embed_content(
-                    model="models/text-embedding-004",
+                    model="models/gemini-embedding-001",
                     content=doc_texts
                 )
                 # Extract vector list per task spec: embeddings = [item for item in response['embedding']]
@@ -183,7 +183,7 @@ def sync_emails_batch(
                 # Fallback: try genai.Client batch via contents list
                 try:
                     # google.genai supports batch via list of contents
-                    batch_res = gemini_client.models.embed_content(model="models/text-embedding-004", contents=doc_texts)  # type: ignore
+                    batch_res = gemini_client.models.embed_content(model="models/gemini-embedding-001", contents=doc_texts)  # type: ignore
                     # Parse batch embeddings
                     if hasattr(batch_res, "embeddings"):
                         batch_vals = getattr(batch_res, "embeddings")
@@ -265,7 +265,7 @@ def batch_sync_with_gemini(emails_batch: List[Dict[str, Any]], collection=None):
 
     # Get embeddings in a single batch call from Gemini API
     response = genai.embed_content(
-        model="models/text-embedding-004",
+        model="models/gemini-embedding-001",
         content=email_texts
     )
 
@@ -358,6 +358,6 @@ if __name__ == "__main__":
     if not emails:
         print("No emails to sync (DB empty).")
     else:
-        print(f"Syncing {len(emails)} emails with Gemini text-embedding-004, embedding_function=None...")
+        print(f"Syncing {len(emails)} emails with Gemini gemini-embedding-001, embedding_function=None...")
         added = sync_emails_batch(emails)
         print(f"Synced {added} chunks to Chroma collection 'emails' (batch 15, 512MB optimized).")

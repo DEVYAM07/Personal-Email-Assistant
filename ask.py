@@ -25,7 +25,7 @@ def _task_spec_query_example(user_query: str, chroma_client):
         embedding_function=None
     )
     query_response = genai.embed_content(
-        model="models/text-embedding-004",
+        model="models/gemini-embedding-001",
         content=user_query
     )
     query_vector = query_response['embedding']
@@ -90,13 +90,13 @@ def _try_get_gemini_client_silent() -> Optional[genai.Client]:
 
 
 def _embed_query_gemini(query: str, gemini_client: Optional[genai.Client] = None) -> Optional[List[float]]:
-    """Embed query via Gemini text-embedding-004; returns vector or None on failure."""
+    """Embed query via Gemini gemini-embedding-001; returns vector or None on failure."""
     try:
         client = gemini_client or _try_get_gemini_client_silent()
         if client is None:
             return None
-        # genai SDK: embed_content with model text-embedding-004
-        res = client.models.embed_content(model="text-embedding-004", contents=query)  # type: ignore[attr-defined]
+        # genai SDK: embed_content with model gemini-embedding-001
+        res = client.models.embed_content(model="gemini-embedding-001", contents=query)  # type: ignore[attr-defined]
         # Handle multiple SDK response shapes
         if isinstance(res, dict) and "embeddings" in res:
             vals = res["embeddings"]
@@ -127,8 +127,9 @@ def _embed_query_gemini(query: str, gemini_client: Optional[genai.Client] = None
         if isinstance(res, list) and len(res) > 0:
             return res[0]  # type: ignore
     except Exception as e:
-        print(f"⚠️ Gemini embed_content failed, falling back to ST: {e}", file=sys.stderr)
-    return None
+        # Fix: update model to gemini-embedding-001 and remove ST fallback - never run local ML on Render 0.1 vCPU
+        print(f"❌ Gemini embed_content failed: {e}", file=sys.stderr)
+        raise
 
 
 def get_gemini_client() -> genai.Client:
@@ -155,7 +156,7 @@ def retrieve_relevant_emails(
 
     Returns a tuple of (documents, metadatas, ids).
     Caps n_results to max 5 (task spec) to prevent prompt payloads from exceeding token/memory limits.
-    Prefers Gemini text-embedding-004 remote API (avoids loading 200MB+ ST model on 512MB free tier, <2s vs 10s local).
+    Prefers Gemini gemini-embedding-001 remote API (avoids loading 200MB+ ST model on 512MB free tier, <2s vs 10s local).
     """
     if not query or not query.strip():
         print("⚠️ Warning: Empty query provided.", file=sys.stderr)
@@ -185,7 +186,7 @@ def retrieve_relevant_emails(
 
         # Task-spec exact snippet: embed user query via Gemini remote
         query_response = genai.embed_content(
-            model="models/text-embedding-004",
+            model="models/gemini-embedding-001",
             content=query
         )
         query_vector = query_response['embedding']
@@ -230,70 +231,19 @@ def retrieve_relevant_emails(
                 n_results=n_results,
             )
         except Exception as e:
-            # Handle dimension mismatch (existing 384-dim ST vectors vs new 768-dim Gemini)
-            # Fallback to ST query so existing DB still works, avoiding 500
+            # Fix: remove ST fallback - never run local ML on Render 0.1 vCPU (would timeout 10s)
             err_msg = str(e).lower()
             if "dimension" in err_msg or "expecting embedding" in err_msg:
-                print(f"⚠️ Gemini query dimension mismatch ({e}), falling back to ST", file=sys.stderr)
-                try:
-                    embedding_fn = get_embedding_function()
-                    # Try both collection names for fallback
-                    try:
-                        collection = chroma_client.get_collection(
-                            name="emails", embedding_function=embedding_fn
-                        )
-                    except Exception:
-                        collection = chroma_client.get_collection(
-                            name="email_vectors", embedding_function=embedding_fn
-                        )
-                    results = collection.query(
-                        query_texts=[query],
-                        n_results=n_results,
-                    )
-                except Exception as e2:
-                    # If collection empty or not found, try or_create
-                    try:
-                        embedding_fn = get_embedding_function()
-                        try:
-                            collection = chroma_client.get_or_create_collection(
-                                name="emails", embedding_function=embedding_fn
-                            )
-                        except Exception:
-                            collection = chroma_client.get_or_create_collection(
-                                name="email_vectors", embedding_function=embedding_fn
-                            )
-                        results = collection.query(
-                            query_texts=[query],
-                            n_results=n_results,
-                        )
-                    except Exception:
-                        raise e2
+                print(f"❌ Gemini query dimension mismatch ({e}). Re-sync with gemini-embedding-001 required. Not falling back to ST.", file=sys.stderr)
+                # Do not fallback to SentenceTransformers - raise to surface 500 and avoid 10s local embedding
+                raise
             else:
+                print(f"❌ Gemini query failed: {e}. Not falling back to ST (512MB).", file=sys.stderr)
                 raise
     else:
-        # Fallback: lazy ST (only if GEMINI_API_KEY missing or embed fails)
-        try:
-            embedding_fn = get_embedding_function()
-            collection = chroma_client.get_collection(
-                name="email_vectors", embedding_function=embedding_fn
-            )
-            results = collection.query(
-                query_texts=[query],
-                n_results=n_results,
-            )
-        except Exception as e:
-            # Handle missing collection
-            if "does not exist" in str(e).lower() or "not found" in str(e).lower():
-                embedding_fn = get_embedding_function()
-                collection = chroma_client.get_or_create_collection(
-                    name="email_vectors", embedding_function=embedding_fn
-                )
-                results = collection.query(
-                    query_texts=[query],
-                    n_results=n_results,
-                )
-            else:
-                raise
+        # No Gemini embedding available - fail fast, do not run local SentenceTransformers on Render
+        print(f"❌ Gemini embedding unavailable for query '{query}' - ST fallback disabled for 512MB (would timeout).", file=sys.stderr)
+        raise RuntimeError(f"Gemini embedding failed for query, ST fallback removed per 512MB task. Error was: {e_genai if 'e_genai' in locals() else 'unknown'}")
 
     documents: List[str] = results.get("documents", [[]])[0] if results.get("documents") else []
     metadatas: List[dict] = results.get("metadatas", [[]])[0] if results.get("metadatas") else []

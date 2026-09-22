@@ -28,5 +28,5 @@ cd frontend && echo "VITE_API_URL=http://localhost:8000" > .env.local && npm run
 ## Sync & Memory
 - `SYNC_BATCH_SIZE` env default `15` in `api.py:203` and `fetch_emails.py:69` (optimized for Render 512MB, was 100; remote Gemini embeddings keep RAM low)
 - Background `202 Accepted` on `POST /api/sync` (poll `GET /api/sync/status`) avoids proxy timeouts
-- Remote Gemini embeddings `models/text-embedding-004` (`api.py:363`) keeps ChromaDB off ONNX/PyTorch for low RAM
+- Remote Gemini embeddings `models/gemini-embedding-001` (`api.py:363`) keeps ChromaDB off ONNX/PyTorch for low RAM
 

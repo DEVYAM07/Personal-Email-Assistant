@@ -45,7 +45,7 @@ This repo is split:
 - Health check: `/api/health`
 - Env: same as above; no persistent disk needed for free tier (ephemeral FS). For persistence later, add disk `/data`.
 
-> **Sync 15 emails per pass:** `SYNC_BATCH_SIZE=15` (default, was 100) uses remote `text-embedding-004` with `embedding_function=None` to keep RAM low; background `202` on `/api/sync` avoids gateway timeouts.
+> **Sync 15 emails per pass:** `SYNC_BATCH_SIZE=15` (default, was 100) uses remote `gemini-embedding-001` with `embedding_function=None` to keep RAM low; background `202` on `/api/sync` avoids gateway timeouts.
 
 ---
 
@@ -107,7 +107,7 @@ cd frontend && npm run build && npm run preview
 | `CORS blocked` | Ensure `FRONTEND_URL` is set to your Vercel URL; backend reads it dynamically via `os.environ.get("FRONTEND_URL", "http://localhost:5173")`. Check `CORS_ALLOWED_ORIGINS` extra. |
 | `redirect_uri_mismatch` | `REDIRECT_URI` env must equal Google Console URI exactly (including `https` and trailing path). |
 | `No refresh token` | OAuth URL uses `access_type=offline` & `prompt=consent` (`api.py:691`). Clear prior grant and re-auth. |
-| `OOM on sync` | Uses remote `text-embedding-004` with `embedding_function=None` to avoid local ONNX/Torch; `SYNC_BATCH_SIZE=15` optimized for 512MB/0.1vCPU (was 100). |
+| `OOM on sync` | Uses remote `gemini-embedding-001` with `embedding_function=None` to avoid local ONNX/Torch; `SYNC_BATCH_SIZE=15` optimized for 512MB/0.1vCPU (was 100). |
 | `VITE_API_URL not applied` | Vercel needs redeploy after env change; `VITE_` prefix required, no trailing slash. |
 | `Render sleeps` | Free tier spins down → cold start ~30s; consider UptimeRobot or upgrade. |
 
